@@ -205,20 +205,6 @@ go run ./examples/h2h3/server
 go run ./examples/h2h3/client
 ```
 
-## Publishing to GitHub
-
-From the project root (`v2fasthttp`):
-
-```bash
-git init
-git add .
-git commit -m "Initial v2fasthttp version"
-
-git remote add origin git@github.com:seiffpes/v2fasthttp.git
-git branch -M main
-git push -u origin main
-```
-
 ## License
 
 Licensed under the MIT License.  
