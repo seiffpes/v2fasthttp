@@ -8,25 +8,7 @@ import (
 	"github.com/valyala/fasthttp/fasthttpproxy"
 )
 
-// Client is a thin wrapper around fasthttp.Client that adds
-// convenient proxy helpers while keeping the same configuration
-// fields and behavior as fasthttp.
-//
-// Example:
-//
-//	claimClient := &fastclient.Client{
-//		Client: fasthttp.Client{
-//			MaxConnsPerHost:               100000,
-//			MaxIdleConnDuration:           100 * time.Millisecond,
-//			NoDefaultUserAgentHeader:      true,
-//			DisableHeaderNamesNormalizing: true,
-//			DisablePathNormalizing:        true,
-//			TLSConfig: &tls.Config{
-//				InsecureSkipVerify: true,
-//			},
-//		},
-//	}
-//	claimClient.SetProxyHTTP("user:pass@127.0.0.1:8080")
+
 type Client struct {
 	fasthttp.Client
 }

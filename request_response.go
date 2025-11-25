@@ -198,20 +198,11 @@ func (r *Response) WriteToHTTP(w http.ResponseWriter) error {
 	return err
 }
 
-func (r *Response) WriteToCtx(ctx *RequestCtx) error {
-	for k, values := range r.Header {
-		for _, v := range values {
-			ctx.Header().Add(k, v)
-		}
-	}
-	if r.StatusCode != 0 {
-		ctx.SetStatusCode(r.StatusCode)
-	}
-	if len(r.Body) == 0 {
-		return nil
-	}
-	_, err := ctx.Write(r.Body)
-	return err
+// WriteToCtx is kept for backward compatibility with older versions
+// that exposed a server-side RequestCtx type. It is a no-op in the
+// current client-only build.
+func (r *Response) WriteToCtx(_ interface{}) error {
+	return nil
 }
 
 func DoWithClient(ctx context.Context, c *Client, req *Request, resp *Response) error {

@@ -3,27 +3,20 @@ package v2fasthttp
 import (
 	"github.com/seiffpes/v2fasthttp/client"
 	"github.com/seiffpes/v2fasthttp/fastclient"
-	"github.com/seiffpes/v2fasthttp/server"
 )
 
 type (
+	// ClientConfig is the configuration for the net/http-based client
+	// that supports HTTP/1.1, HTTP/2 and HTTP/3.
 	ClientConfig = client.Config
-	Client       = client.Client
+	// Client is the high-level net/http-based client.
+	Client = client.Client
 
 	// FastClient is a fasthttp-based client that mirrors
 	// fasthttp.Client behavior but lives inside this library.
 	// Use it when you want HTTP/1.1-only, fasthttp-style performance
 	// and configuration.
 	FastClient = fastclient.Client
-
-	ServerConfig = server.Config
-	Server       = server.Server
-
-	RequestCtx     = server.RequestCtx
-	RequestHandler = server.RequestHandler
-
-	Router     = server.Router
-	WSUpgrader = server.WSUpgrader
 )
 
 var ErrBodyTooLarge = client.ErrBodyTooLarge
@@ -34,20 +27,4 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 
 func DefaultClientConfig() ClientConfig {
 	return client.DefaultConfig()
-}
-
-func NewServer(handler RequestHandler, cfg ServerConfig) *Server {
-	return server.NewFast(handler, cfg)
-}
-
-func DefaultServerConfig() ServerConfig {
-	return server.DefaultConfig()
-}
-
-func NewRouter() *Router {
-	return server.NewRouter()
-}
-
-func NewWSUpgrader() *WSUpgrader {
-	return server.NewWSUpgrader()
 }
