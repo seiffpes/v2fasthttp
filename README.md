@@ -16,7 +16,7 @@ It provides:
 Use it as a normal Go module:
 
 ```bash
-go get github.com/fpes/v2fasthttp
+go get github.com/seiffpes/v2fasthttp
 ```
 
 ## Packages
