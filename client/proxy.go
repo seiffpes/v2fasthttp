@@ -26,7 +26,12 @@ func buildProxy(cfg Config, baseDialer *net.Dialer) (func(*http.Request) (*url.U
 		return proxyFunc, dialContext, nil
 	}
 
-	u, err := url.Parse(cfg.ProxyURL)
+	rawURL := cfg.ProxyURL
+	if !strings.Contains(rawURL, "://") {
+		rawURL = "http://" + rawURL
+	}
+
+	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid proxy url %q: %w", cfg.ProxyURL, err)
 	}

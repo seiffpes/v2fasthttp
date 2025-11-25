@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +41,11 @@ type Config struct {
 
 	ProxyURL string
 
+	// ProxyHTTP is a fasthttp-style alias for ProxyURL.
+	// It accepts strings like "ip:port" or "user:pass@ip:port".
+	// If ProxyURL is empty and ProxyHTTP is set, ProxyHTTP is used.
+	ProxyHTTP string
+
 	ProxyUsername string
 	ProxyPassword string
 
@@ -62,6 +70,38 @@ type Config struct {
 	EnableHTTP3 bool
 
 	TLSClientConfig *tls.Config
+
+	// Dial, if set, overrides the default dialer and proxy handling.
+	// This is a low-level escape hatch similar in spirit to fasthttp's Dial.
+	//
+	// Example:
+	//
+	//	dialer := fasthttpproxy.FasthttpHTTPDialer(proxyAddr)
+	//	cfg.Dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+	//		return dialer(addr)
+	//	}
+	//
+	// When Dial is set, ProxyURL and related proxy options are ignored and
+	// all connections are established via this function.
+	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	// --- fasthttp-style compatibility aliases ---
+
+	// MaxIdleConnDuration is an alias for IdleConnTimeout.
+	MaxIdleConnDuration time.Duration
+
+	// NoDefaultUserAgentHeader is an alias for NoDefaultUserAgent.
+	NoDefaultUserAgentHeader bool
+
+	// TLSConfig is an alias for TLSClientConfig.
+	TLSConfig *tls.Config
+
+	// MaxConnWaitTimeout, DisableHeaderNamesNormalizing and DisablePathNormalizing
+	// are kept for API familiarity with fasthttp, but are currently no-ops
+	// when using the net/http-based client.
+	MaxConnWaitTimeout        time.Duration
+	DisableHeaderNamesNormalizing bool
+	DisablePathNormalizing        bool
 }
 
 func DefaultConfig() Config {
@@ -81,6 +121,23 @@ func (c *Config) SetHTTPProxy(hostport string) {
 	c.ProxyURL = "http://" + hostport
 }
 
+// SetProxyHTTP is an alias for SetHTTPProxy, provided for
+// a fasthttp-style naming. It accepts values like:
+//   "ip:port"
+//   "user:pass@ip:port"
+func (c *Config) SetProxyHTTP(addr string) {
+	c.SetHTTPProxy(addr)
+}
+
+// SetProxy sets a generic proxy URL string.
+// Examples:
+//   - "http://user:pass@127.0.0.1:8080"
+//   - "socks5://user:pass@127.0.0.1:1080"
+//   - "127.0.0.1:8080" (treated as http proxy).
+func (c *Config) SetProxy(proxy string) {
+	c.ProxyURL = proxy
+}
+
 func (c *Config) SetSOCKS5Proxy(hostport string) {
 	c.ProxyURL = "socks5://" + hostport
 }
@@ -89,89 +146,184 @@ func (c *Config) SetSOCKS4Proxy(hostport string) {
 	c.ProxyURL = "socks4://" + hostport
 }
 
+// SetProxyAuth configures username and password used for proxy authentication.
+// Works for HTTP(S) and SOCKS5 proxies.
+func (c *Config) SetProxyAuth(username, password string) {
+	c.ProxyUsername = username
+	c.ProxyPassword = password
+}
+
+// --- Client-level helpers (for fasthttp-style usage) ---
+
+// SetHTTPProxy is a convenience wrapper around Config.SetHTTPProxy.
+// It should be called before the first request is sent.
+func (c *Client) SetHTTPProxy(hostport string) {
+	c.Config.SetHTTPProxy(hostport)
+}
+
+// SetProxyHTTP is a convenience wrapper around Config.SetProxyHTTP.
+// It accepts "ip:port" or "user:pass@ip:port".
+func (c *Client) SetProxyHTTP(addr string) {
+	c.Config.SetProxyHTTP(addr)
+}
+
+// SetSOCKS5Proxy is a convenience wrapper around Config.SetSOCKS5Proxy.
+func (c *Client) SetSOCKS5Proxy(hostport string) {
+	c.Config.SetSOCKS5Proxy(hostport)
+}
+
+// SetSOCKS4Proxy is a convenience wrapper around Config.SetSOCKS4Proxy.
+func (c *Client) SetSOCKS4Proxy(hostport string) {
+	c.Config.SetSOCKS4Proxy(hostport)
+}
+
+// SetProxy is a convenience wrapper around Config.SetProxy.
+func (c *Client) SetProxy(proxy string) {
+	c.Config.SetProxy(proxy)
+}
+
+// SetProxyAuth is a convenience wrapper around Config.SetProxyAuth.
+func (c *Client) SetProxyAuth(username, password string) {
+	c.Config.SetProxyAuth(username, password)
+}
+
 var ErrBodyTooLarge = errors.New("v2fasthttp: response body too large")
 
 type Client struct {
+	// Config holds the public configuration options.
+	// It is embedded so users can configure the client in a fasthttp-style way:
+	//
+	//	claimClient := &client.Client{
+	//		MaxConnsPerHost: 100000,
+	//		IdleConnTimeout: 100 * time.Millisecond,
+	//		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	//	}
+	//
+	// The zero value is valid; defaults are applied lazily on first use.
+	Config
+
 	httpClient *http.Client
 
 	bufPool sync.Pool
 
 	http3 http3Client
 
-	name                      string
-	noDefaultUserAgent        bool
-	maxResponseBodySize       int64
-	maxIdemponentCallAttempts int
-	retryIf                   func(req *http.Request, resp *http.Response, err error) bool
+	initOnce sync.Once
+	initErr  error
 
-	onRequest  func(req *http.Request)
-	onResponse func(resp *http.Response)
-	onRetry    func(req *http.Request, attempt int, err error)
-	onError    func(req *http.Request, err error)
+	proxyAuthorization string
 }
 
 func New(cfg Config) (*Client, error) {
-	applyDefaults(&cfg)
-
-	dialer := &net.Dialer{
-		Timeout:   cfg.DialTimeout,
-		KeepAlive: 30 * time.Second,
+	c := &Client{
+		Config: cfg,
 	}
-
-	proxyFunc, dialContext, err := buildProxy(cfg, dialer)
-	if err != nil {
+	if err := c.init(); err != nil {
 		return nil, err
 	}
+	return c, nil
+}
 
-	transport := &http.Transport{
-		Proxy:                 proxyFunc,
-		DialContext:           dialContext,
-		ForceAttemptHTTP2:     !cfg.DisableHTTP2,
-		MaxConnsPerHost:       cfg.MaxConnsPerHost,
-		MaxIdleConns:          cfg.MaxIdleConns,
-		MaxIdleConnsPerHost:   cfg.MaxIdleConnsPerHost,
-		IdleConnTimeout:       cfg.IdleConnTimeout,
-		TLSHandshakeTimeout:   cfg.TLSHandshakeTimeout,
-		ExpectContinueTimeout: cfg.ExpectContinueTimeout,
-		DisableCompression:    cfg.DisableCompression,
-		TLSClientConfig:       cfg.TLSClientConfig,
-	}
+// init lazily initializes the underlying transports and pools based on Config.
+// It is safe for concurrent use.
+func (c *Client) init() error {
+	c.initOnce.Do(func() {
+		cfg := c.Config
+		applyDefaults(&cfg)
 
-	if !cfg.DisableHTTP2 {
-		if err := http2.ConfigureTransport(transport); err != nil {
-			return nil, err
+		var proxyFunc func(*http.Request) (*url.URL, error)
+		var dialContext func(context.Context, string, string) (net.Conn, error)
+		var err error
+
+		if cfg.Dial != nil {
+			proxyFunc = nil
+			dialContext = cfg.Dial
+		} else {
+			dialer := &net.Dialer{
+				Timeout:   cfg.DialTimeout,
+				KeepAlive: 30 * time.Second,
+			}
+
+			proxyFunc, dialContext, err = buildProxy(cfg, dialer)
+			if err != nil {
+				c.initErr = err
+				return
+			}
 		}
-	}
 
-	c := &Client{
-		httpClient: &http.Client{
+		var proxyAuthHeader string
+		if cfg.ProxyURL != "" {
+			if u, perr := url.Parse(cfg.ProxyURL); perr == nil {
+				username := cfg.ProxyUsername
+				password := cfg.ProxyPassword
+				if u.User != nil {
+					username = u.User.Username()
+					if p, ok := u.User.Password(); ok {
+						password = p
+					}
+				}
+				scheme := strings.ToLower(u.Scheme)
+				if (scheme == "http" || scheme == "https") && (username != "" || password != "") {
+					creds := username + ":" + password
+					proxyAuthHeader = "Basic " + base64.StdEncoding.EncodeToString([]byte(creds))
+				}
+			}
+		}
+
+		transport := &http.Transport{
+			Proxy:                 proxyFunc,
+			DialContext:           dialContext,
+			ForceAttemptHTTP2:     !cfg.DisableHTTP2,
+			MaxConnsPerHost:       cfg.MaxConnsPerHost,
+			MaxIdleConns:          cfg.MaxIdleConns,
+			MaxIdleConnsPerHost:   cfg.MaxIdleConnsPerHost,
+			IdleConnTimeout:       cfg.IdleConnTimeout,
+			TLSHandshakeTimeout:   cfg.TLSHandshakeTimeout,
+			ExpectContinueTimeout: cfg.ExpectContinueTimeout,
+			DisableCompression:    cfg.DisableCompression,
+			TLSClientConfig:       cfg.TLSClientConfig,
+		}
+
+		if proxyAuthHeader != "" {
+			transport.ProxyConnectHeader = http.Header{
+				"Proxy-Authorization": []string{proxyAuthHeader},
+			}
+		}
+
+		if !cfg.DisableHTTP2 {
+			if err := http2.ConfigureTransport(transport); err != nil {
+				c.initErr = err
+				return
+			}
+		}
+
+		c.httpClient = &http.Client{
 			Transport: transport,
-		},
-		bufPool: sync.Pool{
+		}
+
+		c.bufPool = sync.Pool{
 			New: func() any {
 				return bytes.NewBuffer(make([]byte, 0, 32*1024))
 			},
-		},
-	}
+		}
 
-	c.http3 = newHTTP3Client(cfg)
+		c.http3 = newHTTP3Client(cfg)
 
-	c.name = cfg.Name
-	c.noDefaultUserAgent = cfg.NoDefaultUserAgent
-	c.maxResponseBodySize = cfg.MaxResponseBodySize
-	c.maxIdemponentCallAttempts = cfg.MaxIdemponentCallAttempts
-	c.retryIf = cfg.RetryIf
-
-	c.onRequest = cfg.OnRequest
-	c.onResponse = cfg.OnResponse
-	c.onRetry = cfg.OnRetry
-	c.onError = cfg.OnError
-
-	return c, nil
+		// Store back the normalized config (with defaults applied).
+		c.Config = cfg
+		c.proxyAuthorization = proxyAuthHeader
+	})
+	return c.initErr
 }
 
 func applyDefaults(cfg *Config) {
 	def := DefaultConfig()
+	if cfg.ProxyURL == "" && cfg.ProxyHTTP != "" {
+		cfg.ProxyURL = cfg.ProxyHTTP
+	}
+	if cfg.MaxIdleConnDuration > 0 && cfg.IdleConnTimeout == 0 {
+		cfg.IdleConnTimeout = cfg.MaxIdleConnDuration
+	}
 	if cfg.MaxConnsPerHost == 0 {
 		cfg.MaxConnsPerHost = def.MaxConnsPerHost
 	}
@@ -199,13 +351,23 @@ func applyDefaults(cfg *Config) {
 	if cfg.ProxyHandshakeTimeout == 0 {
 		cfg.ProxyHandshakeTimeout = cfg.DialTimeout
 	}
+	if cfg.NoDefaultUserAgentHeader {
+		cfg.NoDefaultUserAgent = true
+	}
+	if cfg.TLSClientConfig == nil && cfg.TLSConfig != nil {
+		cfg.TLSClientConfig = cfg.TLSConfig
+	}
 	if cfg.MaxIdemponentCallAttempts <= 0 {
 		cfg.MaxIdemponentCallAttempts = 1
 	}
 }
 
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
-	maxAttempts := c.maxIdemponentCallAttempts
+	if err := c.init(); err != nil {
+		return nil, err
+	}
+
+	maxAttempts := c.MaxIdemponentCallAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 1
 	}
@@ -230,13 +392,13 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 
 		resp, err = c.doOnce(req)
 
-		if err != nil && c.onError != nil {
-			c.onError(req, err)
+		if err != nil && c.OnError != nil {
+			c.OnError(req, err)
 		}
 
 		shouldRetry := false
-		if c.retryIf != nil {
-			shouldRetry = c.retryIf(req, resp, err)
+		if c.RetryIf != nil {
+			shouldRetry = c.RetryIf(req, resp, err)
 		} else {
 			shouldRetry = err != nil && idempotent
 		}
@@ -245,8 +407,8 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 			break
 		}
 
-		if c.onRetry != nil {
-			c.onRetry(req, attempt+1, err)
+		if c.OnRetry != nil {
+			c.OnRetry(req, attempt+1, err)
 		}
 
 		if resp != nil {
@@ -258,6 +420,10 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 }
 
 func (c *Client) GetBytes(ctx context.Context, url string) ([]byte, int, error) {
+	if err := c.init(); err != nil {
+		return nil, 0, err
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, 0, err
@@ -274,10 +440,10 @@ func (c *Client) GetBytes(ctx context.Context, url string) ([]byte, int, error) 
 	defer c.bufPool.Put(buf)
 
 	var reader io.Reader = resp.Body
-	if c.maxResponseBodySize > 0 {
+	if c.MaxResponseBodySize > 0 {
 		reader = &io.LimitedReader{
 			R: resp.Body,
-			N: c.maxResponseBodySize + 1,
+			N: c.MaxResponseBodySize + 1,
 		}
 	}
 
@@ -286,7 +452,7 @@ func (c *Client) GetBytes(ctx context.Context, url string) ([]byte, int, error) 
 		return nil, resp.StatusCode, copyErr
 	}
 
-	if c.maxResponseBodySize > 0 && int64(buf.Len()) > c.maxResponseBodySize {
+	if c.MaxResponseBodySize > 0 && int64(buf.Len()) > c.MaxResponseBodySize {
 		return nil, resp.StatusCode, ErrBodyTooLarge
 	}
 
@@ -297,6 +463,10 @@ func (c *Client) GetBytes(ctx context.Context, url string) ([]byte, int, error) 
 }
 
 func (c *Client) CloseIdleConnections() {
+	if err := c.init(); err != nil {
+		return
+	}
+
 	if tr, ok := c.httpClient.Transport.(interface{ CloseIdleConnections() }); ok {
 		tr.CloseIdleConnections()
 	}
@@ -306,14 +476,22 @@ func (c *Client) CloseIdleConnections() {
 }
 
 func (c *Client) doOnce(req *http.Request) (*http.Response, error) {
-	if c.onRequest != nil {
-		c.onRequest(req)
+	if err := c.init(); err != nil {
+		return nil, err
 	}
 
-	if !c.noDefaultUserAgent {
+	if c.proxyAuthorization != "" && req.Header.Get("Proxy-Authorization") == "" {
+		req.Header.Set("Proxy-Authorization", c.proxyAuthorization)
+	}
+
+	if c.OnRequest != nil {
+		c.OnRequest(req)
+	}
+
+	if !c.NoDefaultUserAgent {
 		if req.Header.Get("User-Agent") == "" {
-			if c.name != "" {
-				req.Header.Set("User-Agent", c.name)
+			if c.Name != "" {
+				req.Header.Set("User-Agent", c.Name)
 			} else {
 				req.Header.Set("User-Agent", "v2fasthttp-client")
 			}
@@ -322,16 +500,16 @@ func (c *Client) doOnce(req *http.Request) (*http.Response, error) {
 
 	if c.http3 != nil {
 		if resp, ok, err := c.http3MaybeDo(c.http3, req); ok || err != nil {
-			if err == nil && c.onResponse != nil {
-				c.onResponse(resp)
+			if err == nil && c.OnResponse != nil {
+				c.OnResponse(resp)
 			}
 			return resp, err
 		}
 	}
 
 	resp, err := c.httpClient.Do(req)
-	if err == nil && c.onResponse != nil {
-		c.onResponse(resp)
+	if err == nil && c.OnResponse != nil {
+		c.OnResponse(resp)
 	}
 	return resp, err
 }
