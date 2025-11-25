@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -67,6 +68,86 @@ func (r *Request) SetBody(body []byte) {
 		return
 	}
 	r.Body = append(r.Body[:0], body...)
+}
+
+// SetHeader sets a header key to the given value,
+// replacing any existing values for that key.
+func (r *Request) SetHeader(key, value string) {
+	if r.Header == nil {
+		r.Header = make(http.Header)
+	}
+	r.Header.Set(key, value)
+}
+
+// AddHeader adds a header value for the given key.
+func (r *Request) AddHeader(key, value string) {
+	if r.Header == nil {
+		r.Header = make(http.Header)
+	}
+	r.Header.Add(key, value)
+}
+
+// DelHeader removes all values associated with the given header key.
+func (r *Request) DelHeader(key string) {
+	if r.Header == nil {
+		return
+	}
+	r.Header.Del(key)
+}
+
+// HeaderValue returns the first value associated with the given key.
+// It returns an empty string if the header is not present.
+func (r *Request) HeaderValue(key string) string {
+	if r.Header == nil {
+		return ""
+	}
+	return r.Header.Get(key)
+}
+
+// SetQueryParam sets a single query parameter on the request URI.
+// Existing values for that key are replaced.
+func (r *Request) SetQueryParam(key, value string) {
+	u, err := url.Parse(r.URI)
+	if err != nil {
+		return
+	}
+	q := u.Query()
+	q.Set(key, value)
+	u.RawQuery = q.Encode()
+	r.URI = u.String()
+}
+
+// AddQueryParam adds a value for the given query key on the request URI.
+func (r *Request) AddQueryParam(key, value string) {
+	u, err := url.Parse(r.URI)
+	if err != nil {
+		return
+	}
+	q := u.Query()
+	q.Add(key, value)
+	u.RawQuery = q.Encode()
+	r.URI = u.String()
+}
+
+// DelQueryParam removes all values for the given query key.
+func (r *Request) DelQueryParam(key string) {
+	u, err := url.Parse(r.URI)
+	if err != nil {
+		return
+	}
+	q := u.Query()
+	q.Del(key)
+	u.RawQuery = q.Encode()
+	r.URI = u.String()
+}
+
+// QueryParam returns the first value associated with the given query key.
+func (r *Request) QueryParam(key string) string {
+	u, err := url.Parse(r.URI)
+	if err != nil {
+		return ""
+	}
+	return u.Query().Get(key)
 }
 
 func (r *Request) HTTPRequest(ctx context.Context) (*http.Request, error) {
@@ -159,6 +240,54 @@ func (r *Response) SetBody(body []byte) {
 		return
 	}
 	r.Body = append(r.Body[:0], body...)
+}
+
+// SetHeader sets a header key to the given value on the response.
+func (r *Response) SetHeader(key, value string) {
+	if r.Header == nil {
+		r.Header = make(http.Header)
+	}
+	r.Header.Set(key, value)
+}
+
+// AddHeader adds a header value for the given key on the response.
+func (r *Response) AddHeader(key, value string) {
+	if r.Header == nil {
+		r.Header = make(http.Header)
+	}
+	r.Header.Add(key, value)
+}
+
+// DelHeader removes all values associated with the given header key on
+// the response.
+func (r *Response) DelHeader(key string) {
+	if r.Header == nil {
+		return
+	}
+	r.Header.Del(key)
+}
+
+// HeaderValue returns the first header value associated with the given key.
+func (r *Response) HeaderValue(key string) string {
+	if r.Header == nil {
+		return ""
+	}
+	return r.Header.Get(key)
+}
+
+// BodyBytes returns a copy of the response body.
+func (r *Response) BodyBytes() []byte {
+	if len(r.Body) == 0 {
+		return nil
+	}
+	out := make([]byte, len(r.Body))
+	copy(out, r.Body)
+	return out
+}
+
+// BodyString returns the response body as string.
+func (r *Response) BodyString() string {
+	return string(r.Body)
 }
 
 func (r *Response) FromHTTP(resp *http.Response) error {
@@ -366,4 +495,36 @@ func DeleteTimeout(url string, resp *Response, timeout time.Duration) error {
 	req.SetMethod(http.MethodDelete)
 	req.SetRequestURI(url)
 	return DoTimeout(req, resp, timeout)
+}
+
+// Convenience helpers that mirror fasthttp-style GetBytes* on the default client.
+
+// GetBytesURL fetches the given URL using the default client and returns
+// the response body and status code.
+func GetBytesURL(targetURL string) ([]byte, int, error) {
+	c, err := getDefaultClient()
+	if err != nil {
+		return nil, 0, err
+	}
+	return c.GetBytes(context.Background(), targetURL)
+}
+
+// GetBytesTimeout fetches the given URL using the default client and the
+// provided timeout.
+func GetBytesTimeout(targetURL string, timeout time.Duration) ([]byte, int, error) {
+	c, err := getDefaultClient()
+	if err != nil {
+		return nil, 0, err
+	}
+	return c.GetBytesTimeout(targetURL, timeout)
+}
+
+// GetBytesDeadline fetches the given URL using the default client and the
+// provided deadline.
+func GetBytesDeadline(targetURL string, deadline time.Time) ([]byte, int, error) {
+	c, err := getDefaultClient()
+	if err != nil {
+		return nil, 0, err
+	}
+	return c.GetBytesDeadline(targetURL, deadline)
 }
