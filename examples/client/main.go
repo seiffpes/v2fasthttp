@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"v2fasthttp/client"
+	"github.com/seiffpes/v2fasthttp/client"
 )
 
 func main() {

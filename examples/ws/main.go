@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"v2fasthttp/server"
+	"github.com/seiffpes/v2fasthttp/server"
 )
 
 func main() {

@@ -1,8 +1,8 @@
 package v2fasthttp
 
 import (
-	"v2fasthttp/client"
-	"v2fasthttp/server"
+	"github.com/seiffpes/v2fasthttp/client"
+	"github.com/seiffpes/v2fasthttp/server"
 )
 
 type (
