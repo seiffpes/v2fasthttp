@@ -2,12 +2,19 @@ package v2fasthttp
 
 import (
 	"github.com/seiffpes/v2fasthttp/client"
+	"github.com/seiffpes/v2fasthttp/fastclient"
 	"github.com/seiffpes/v2fasthttp/server"
 )
 
 type (
 	ClientConfig = client.Config
 	Client       = client.Client
+
+	// FastClient is a fasthttp-based client that mirrors
+	// fasthttp.Client behavior but lives inside this library.
+	// Use it when you want HTTP/1.1-only, fasthttp-style performance
+	// and configuration.
+	FastClient = fastclient.Client
 
 	ServerConfig = server.Config
 	Server       = server.Server
