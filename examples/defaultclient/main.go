@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"v2fasthttp"
+	"github.com/seiffpes/v2fasthttp"
 )
 
 // This example shows how to configure the global
@@ -85,4 +85,3 @@ func main() {
 	}
 	fmt.Printf("GET / status=%d body=%s\n", resp.StatusCode, resp.Body)
 }
-

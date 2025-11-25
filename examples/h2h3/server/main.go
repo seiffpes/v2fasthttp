@@ -5,7 +5,7 @@ import (
 	"log"
 
 	"github.com/quic-go/quic-go/http3"
-	"v2fasthttp/server"
+	"github.com/seiffpes/v2fasthttp/server"
 )
 
 func main() {

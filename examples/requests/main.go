@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"v2fasthttp"
+	"github.com/seiffpes/v2fasthttp"
 )
 
 func main() {
