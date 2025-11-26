@@ -3,6 +3,7 @@ package v2fasthttp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
@@ -527,4 +528,76 @@ func GetBytesDeadline(targetURL string, deadline time.Time) ([]byte, int, error)
 		return nil, 0, err
 	}
 	return c.GetBytesDeadline(targetURL, deadline)
+}
+
+// GetStringURL fetches the URL and returns the response body as string
+// plus the status code.
+func GetStringURL(targetURL string) (string, int, error) {
+	body, status, err := GetBytesURL(targetURL)
+	return string(body), status, err
+}
+
+// GetStringTimeout is like GetStringURL but with a timeout.
+func GetStringTimeout(targetURL string, timeout time.Duration) (string, int, error) {
+	body, status, err := GetBytesTimeout(targetURL, timeout)
+	return string(body), status, err
+}
+
+// PostBytesURL sends a POST request with the given body using the
+// default client and returns the response body and status code.
+func PostBytesURL(targetURL string, body []byte) ([]byte, int, error) {
+	resp := AcquireResponse()
+	defer ReleaseResponse(resp)
+	if err := Post(targetURL, body, resp); err != nil {
+		return nil, 0, err
+	}
+	out := make([]byte, len(resp.Body))
+	copy(out, resp.Body)
+	return out, resp.StatusCode, nil
+}
+
+// PostBytesTimeout is like PostBytesURL but with a timeout.
+func PostBytesTimeout(targetURL string, body []byte, timeout time.Duration) ([]byte, int, error) {
+	resp := AcquireResponse()
+	defer ReleaseResponse(resp)
+	if err := PostTimeout(targetURL, body, resp, timeout); err != nil {
+		return nil, 0, err
+	}
+	out := make([]byte, len(resp.Body))
+	copy(out, resp.Body)
+	return out, resp.StatusCode, nil
+}
+
+// PostStringURL sends a POST request with the given body and returns the
+// response body as string plus status code.
+func PostStringURL(targetURL string, body []byte) (string, int, error) {
+	b, status, err := PostBytesURL(targetURL, body)
+	return string(b), status, err
+}
+
+// PostStringTimeout is like PostStringURL but with a timeout.
+func PostStringTimeout(targetURL string, body []byte, timeout time.Duration) (string, int, error) {
+	b, status, err := PostBytesTimeout(targetURL, body, timeout)
+	return string(b), status, err
+}
+
+// PostJSON sends a POST with JSON-encoded body into resp using the default client.
+func PostJSON(url string, v any, resp *Response) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return Post(url, data, resp)
+}
+
+// PostJSONBytesURL sends a JSON POST and returns response body and status.
+func PostJSONBytesURL(targetURL string, v any) ([]byte, int, error) {
+	resp := AcquireResponse()
+	defer ReleaseResponse(resp)
+	if err := PostJSON(targetURL, v, resp); err != nil {
+		return nil, 0, err
+	}
+	out := make([]byte, len(resp.Body))
+	copy(out, resp.Body)
+	return out, resp.StatusCode, nil
 }
