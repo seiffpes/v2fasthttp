@@ -3,6 +3,7 @@ package v2fasthttp
 import (
 	"github.com/seiffpes/v2fasthttp/client"
 	"github.com/seiffpes/v2fasthttp/fastclient"
+	"github.com/valyala/fasthttp"
 )
 
 type (
@@ -17,6 +18,12 @@ type (
 	// Use it when you want HTTP/1.1-only, fasthttp-style performance
 	// and configuration.
 	FastClient = fastclient.Client
+
+	// FastRequest and FastResponse are aliases for fasthttp types
+	// so callers can use them via this library without importing
+	// fasthttp directly.
+	FastRequest  = fasthttp.Request
+	FastResponse = fasthttp.Response
 )
 
 var ErrBodyTooLarge = client.ErrBodyTooLarge
