@@ -243,6 +243,19 @@ func (r *Response) SetBody(body []byte) {
 	r.Body = append(r.Body[:0], body...)
 }
 
+// SetBodyString sets the response body from a string.
+func (r *Response) SetBodyString(body string) {
+	r.SetBody([]byte(body))
+}
+
+// AppendBody appends the given bytes to the existing body.
+func (r *Response) AppendBody(body []byte) {
+	if len(body) == 0 {
+		return
+	}
+	r.Body = append(r.Body, body...)
+}
+
 // SetHeader sets a header key to the given value on the response.
 func (r *Response) SetHeader(key, value string) {
 	if r.Header == nil {
@@ -289,6 +302,22 @@ func (r *Response) BodyBytes() []byte {
 // BodyString returns the response body as string.
 func (r *Response) BodyString() string {
 	return string(r.Body)
+}
+
+// StatusCodeValue returns the current status code. Provided for
+// fasthttp-style API familiarity.
+func (r *Response) StatusCodeValue() int {
+	return r.StatusCode
+}
+
+// SetContentType sets the Content-Type header on the response.
+func (r *Response) SetContentType(ct string) {
+	r.SetHeader("Content-Type", ct)
+}
+
+// ContentType returns the Content-Type header value.
+func (r *Response) ContentType() string {
+	return r.HeaderValue("Content-Type")
 }
 
 func (r *Response) FromHTTP(resp *http.Response) error {
