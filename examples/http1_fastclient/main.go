@@ -10,10 +10,7 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
-// Example: HTTP/1.1-only client built on fasthttp via v2fasthttp.FastClient.
-// Shows GET and POST with and without proxy.
 func main() {
-	// Build a fasthttp-style client using your library.
 	client := &v2fasthttp.FastClient{
 		Client: fasthttp.Client{
 			MaxConnsPerHost:               100000,
@@ -76,4 +73,3 @@ func doFastPost(c *v2fasthttp.FastClient, url string, body []byte) error {
 	fmt.Printf("[fastclient] POST %s status=%d body=%s\n", url, resp.StatusCode(), resp.Body())
 	return nil
 }
-

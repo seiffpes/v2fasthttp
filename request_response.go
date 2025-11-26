@@ -71,8 +71,6 @@ func (r *Request) SetBody(body []byte) {
 	r.Body = append(r.Body[:0], body...)
 }
 
-// SetHeader sets a header key to the given value,
-// replacing any existing values for that key.
 func (r *Request) SetHeader(key, value string) {
 	if r.Header == nil {
 		r.Header = make(http.Header)
@@ -80,7 +78,6 @@ func (r *Request) SetHeader(key, value string) {
 	r.Header.Set(key, value)
 }
 
-// AddHeader adds a header value for the given key.
 func (r *Request) AddHeader(key, value string) {
 	if r.Header == nil {
 		r.Header = make(http.Header)
@@ -88,7 +85,6 @@ func (r *Request) AddHeader(key, value string) {
 	r.Header.Add(key, value)
 }
 
-// DelHeader removes all values associated with the given header key.
 func (r *Request) DelHeader(key string) {
 	if r.Header == nil {
 		return
@@ -96,8 +92,6 @@ func (r *Request) DelHeader(key string) {
 	r.Header.Del(key)
 }
 
-// HeaderValue returns the first value associated with the given key.
-// It returns an empty string if the header is not present.
 func (r *Request) HeaderValue(key string) string {
 	if r.Header == nil {
 		return ""
@@ -105,8 +99,6 @@ func (r *Request) HeaderValue(key string) string {
 	return r.Header.Get(key)
 }
 
-// SetQueryParam sets a single query parameter on the request URI.
-// Existing values for that key are replaced.
 func (r *Request) SetQueryParam(key, value string) {
 	u, err := url.Parse(r.URI)
 	if err != nil {
@@ -118,7 +110,6 @@ func (r *Request) SetQueryParam(key, value string) {
 	r.URI = u.String()
 }
 
-// AddQueryParam adds a value for the given query key on the request URI.
 func (r *Request) AddQueryParam(key, value string) {
 	u, err := url.Parse(r.URI)
 	if err != nil {
@@ -130,7 +121,6 @@ func (r *Request) AddQueryParam(key, value string) {
 	r.URI = u.String()
 }
 
-// DelQueryParam removes all values for the given query key.
 func (r *Request) DelQueryParam(key string) {
 	u, err := url.Parse(r.URI)
 	if err != nil {
@@ -142,7 +132,6 @@ func (r *Request) DelQueryParam(key string) {
 	r.URI = u.String()
 }
 
-// QueryParam returns the first value associated with the given query key.
 func (r *Request) QueryParam(key string) string {
 	u, err := url.Parse(r.URI)
 	if err != nil {
@@ -243,12 +232,10 @@ func (r *Response) SetBody(body []byte) {
 	r.Body = append(r.Body[:0], body...)
 }
 
-// SetBodyString sets the response body from a string.
 func (r *Response) SetBodyString(body string) {
 	r.SetBody([]byte(body))
 }
 
-// AppendBody appends the given bytes to the existing body.
 func (r *Response) AppendBody(body []byte) {
 	if len(body) == 0 {
 		return
@@ -256,7 +243,6 @@ func (r *Response) AppendBody(body []byte) {
 	r.Body = append(r.Body, body...)
 }
 
-// SetHeader sets a header key to the given value on the response.
 func (r *Response) SetHeader(key, value string) {
 	if r.Header == nil {
 		r.Header = make(http.Header)
@@ -264,7 +250,6 @@ func (r *Response) SetHeader(key, value string) {
 	r.Header.Set(key, value)
 }
 
-// AddHeader adds a header value for the given key on the response.
 func (r *Response) AddHeader(key, value string) {
 	if r.Header == nil {
 		r.Header = make(http.Header)
@@ -272,8 +257,6 @@ func (r *Response) AddHeader(key, value string) {
 	r.Header.Add(key, value)
 }
 
-// DelHeader removes all values associated with the given header key on
-// the response.
 func (r *Response) DelHeader(key string) {
 	if r.Header == nil {
 		return
@@ -281,7 +264,6 @@ func (r *Response) DelHeader(key string) {
 	r.Header.Del(key)
 }
 
-// HeaderValue returns the first header value associated with the given key.
 func (r *Response) HeaderValue(key string) string {
 	if r.Header == nil {
 		return ""
@@ -289,7 +271,6 @@ func (r *Response) HeaderValue(key string) string {
 	return r.Header.Get(key)
 }
 
-// BodyBytes returns a copy of the response body.
 func (r *Response) BodyBytes() []byte {
 	if len(r.Body) == 0 {
 		return nil
@@ -299,23 +280,18 @@ func (r *Response) BodyBytes() []byte {
 	return out
 }
 
-// BodyString returns the response body as string.
 func (r *Response) BodyString() string {
 	return string(r.Body)
 }
 
-// StatusCodeValue returns the current status code. Provided for
-// fasthttp-style API familiarity.
 func (r *Response) StatusCodeValue() int {
 	return r.StatusCode
 }
 
-// SetContentType sets the Content-Type header on the response.
 func (r *Response) SetContentType(ct string) {
 	r.SetHeader("Content-Type", ct)
 }
 
-// ContentType returns the Content-Type header value.
 func (r *Response) ContentType() string {
 	return r.HeaderValue("Content-Type")
 }
@@ -357,9 +333,6 @@ func (r *Response) WriteToHTTP(w http.ResponseWriter) error {
 	return err
 }
 
-// WriteToCtx is kept for backward compatibility with older versions
-// that exposed a server-side RequestCtx type. It is a no-op in the
-// current client-only build.
 func (r *Response) WriteToCtx(_ interface{}) error {
 	return nil
 }
@@ -398,12 +371,6 @@ func getDefaultClient() (*Client, error) {
 	return c, err
 }
 
-// SetDefaultClientConfig sets the configuration used by the
-// global fasthttp-style client (used by Do/Get/Post helpers).
-//
-// It is safe to call this multiple times; the last successful
-// call wins. For best results, call it during application
-// startup before using the package-level helpers.
 func SetDefaultClientConfig(cfg ClientConfig) error {
 	c, err := NewClient(cfg)
 	defaultClientMu.Lock()
@@ -411,14 +378,10 @@ func SetDefaultClientConfig(cfg ClientConfig) error {
 	defaultClientErr = err
 	defaultClientMu.Unlock()
 
-	// Mark the lazy initializer as done so getDefaultClient
-	// doesn't overwrite the configured client.
 	defaultClientOnce.Do(func() {})
 	return err
 }
 
-// SetDefaultClient allows providing a fully constructed Client
-// instance to be used by the global fasthttp-style helpers.
 func SetDefaultClient(c *Client) {
 	defaultClientMu.Lock()
 	defaultClient = c
@@ -527,10 +490,6 @@ func DeleteTimeout(url string, resp *Response, timeout time.Duration) error {
 	return DoTimeout(req, resp, timeout)
 }
 
-// Convenience helpers that mirror fasthttp-style GetBytes* on the default client.
-
-// GetBytesURL fetches the given URL using the default client and returns
-// the response body and status code.
 func GetBytesURL(targetURL string) ([]byte, int, error) {
 	c, err := getDefaultClient()
 	if err != nil {
@@ -539,8 +498,6 @@ func GetBytesURL(targetURL string) ([]byte, int, error) {
 	return c.GetBytes(context.Background(), targetURL)
 }
 
-// GetBytesTimeout fetches the given URL using the default client and the
-// provided timeout.
 func GetBytesTimeout(targetURL string, timeout time.Duration) ([]byte, int, error) {
 	c, err := getDefaultClient()
 	if err != nil {
@@ -549,8 +506,6 @@ func GetBytesTimeout(targetURL string, timeout time.Duration) ([]byte, int, erro
 	return c.GetBytesTimeout(targetURL, timeout)
 }
 
-// GetBytesDeadline fetches the given URL using the default client and the
-// provided deadline.
 func GetBytesDeadline(targetURL string, deadline time.Time) ([]byte, int, error) {
 	c, err := getDefaultClient()
 	if err != nil {
@@ -559,21 +514,16 @@ func GetBytesDeadline(targetURL string, deadline time.Time) ([]byte, int, error)
 	return c.GetBytesDeadline(targetURL, deadline)
 }
 
-// GetStringURL fetches the URL and returns the response body as string
-// plus the status code.
 func GetStringURL(targetURL string) (string, int, error) {
 	body, status, err := GetBytesURL(targetURL)
 	return string(body), status, err
 }
 
-// GetStringTimeout is like GetStringURL but with a timeout.
 func GetStringTimeout(targetURL string, timeout time.Duration) (string, int, error) {
 	body, status, err := GetBytesTimeout(targetURL, timeout)
 	return string(body), status, err
 }
 
-// PostBytesURL sends a POST request with the given body using the
-// default client and returns the response body and status code.
 func PostBytesURL(targetURL string, body []byte) ([]byte, int, error) {
 	resp := AcquireResponse()
 	defer ReleaseResponse(resp)
@@ -585,7 +535,6 @@ func PostBytesURL(targetURL string, body []byte) ([]byte, int, error) {
 	return out, resp.StatusCode, nil
 }
 
-// PostBytesTimeout is like PostBytesURL but with a timeout.
 func PostBytesTimeout(targetURL string, body []byte, timeout time.Duration) ([]byte, int, error) {
 	resp := AcquireResponse()
 	defer ReleaseResponse(resp)
@@ -597,20 +546,16 @@ func PostBytesTimeout(targetURL string, body []byte, timeout time.Duration) ([]b
 	return out, resp.StatusCode, nil
 }
 
-// PostStringURL sends a POST request with the given body and returns the
-// response body as string plus status code.
 func PostStringURL(targetURL string, body []byte) (string, int, error) {
 	b, status, err := PostBytesURL(targetURL, body)
 	return string(b), status, err
 }
 
-// PostStringTimeout is like PostStringURL but with a timeout.
 func PostStringTimeout(targetURL string, body []byte, timeout time.Duration) (string, int, error) {
 	b, status, err := PostBytesTimeout(targetURL, body, timeout)
 	return string(b), status, err
 }
 
-// PostJSON sends a POST with JSON-encoded body into resp using the default client.
 func PostJSON(url string, v any, resp *Response) error {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -619,7 +564,6 @@ func PostJSON(url string, v any, resp *Response) error {
 	return Post(url, data, resp)
 }
 
-// PostJSONBytesURL sends a JSON POST and returns response body and status.
 func PostJSONBytesURL(targetURL string, v any) ([]byte, int, error) {
 	resp := AcquireResponse()
 	defer ReleaseResponse(resp)

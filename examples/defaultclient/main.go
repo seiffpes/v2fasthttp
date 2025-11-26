@@ -10,8 +10,6 @@ import (
 	"github.com/seiffpes/v2fasthttp"
 )
 
-// Example: configure the global client once and use the package-level
-// helpers (Get/Post/Do) in a fasthttp-style way.
 func main() {
 	// 1) Configure the default client once at startup.
 	cfg := v2fasthttp.DefaultClientConfig()

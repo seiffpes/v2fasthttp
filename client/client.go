@@ -34,16 +34,10 @@ type Config struct {
 
 	DisableCompression bool
 
-	// DisableHTTP2 disables HTTP/2 support on the underlying
-	// net/http Transport. When set, all requests will use HTTP/1.1
-	// over TCP/TLS (with optional HTTP/3 if enabled).
 	DisableHTTP2 bool
 
 	ProxyURL string
 
-	// ProxyHTTP is a fasthttp-style alias for ProxyURL.
-	// It accepts strings like "ip:port" or "user:pass@ip:port".
-	// If ProxyURL is empty and ProxyHTTP is set, ProxyHTTP is used.
 	ProxyHTTP string
 
 	ProxyUsername string
@@ -65,40 +59,18 @@ type Config struct {
 	OnRetry    func(req *http.Request, attempt int, err error)
 	OnError    func(req *http.Request, err error)
 
-	// EnableHTTP3 enables an additional HTTP/3 client for HTTPS
-	// requests when there is no proxy configured.
 	EnableHTTP3 bool
 
 	TLSClientConfig *tls.Config
 
-	// Dial, if set, overrides the default dialer and proxy handling.
-	// This is a low-level escape hatch similar in spirit to fasthttp's Dial.
-	//
-	// Example:
-	//
-	//	dialer := fasthttpproxy.FasthttpHTTPDialer(proxyAddr)
-	//	cfg.Dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
-	//		return dialer(addr)
-	//	}
-	//
-	// When Dial is set, ProxyURL and related proxy options are ignored and
-	// all connections are established via this function.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 
-	// --- fasthttp-style compatibility aliases ---
-
-	// MaxIdleConnDuration is an alias for IdleConnTimeout.
 	MaxIdleConnDuration time.Duration
 
-	// NoDefaultUserAgentHeader is an alias for NoDefaultUserAgent.
 	NoDefaultUserAgentHeader bool
 
-	// TLSConfig is an alias for TLSClientConfig.
 	TLSConfig *tls.Config
 
-	// MaxConnWaitTimeout, DisableHeaderNamesNormalizing and DisablePathNormalizing
-	// are kept for API familiarity with fasthttp, but are currently no-ops
-	// when using the net/http-based client.
 	MaxConnWaitTimeout        time.Duration
 	DisableHeaderNamesNormalizing bool
 	DisablePathNormalizing        bool
@@ -121,19 +93,10 @@ func (c *Config) SetHTTPProxy(hostport string) {
 	c.ProxyURL = "http://" + hostport
 }
 
-// SetProxyHTTP is an alias for SetHTTPProxy, provided for
-// a fasthttp-style naming. It accepts values like:
-//   "ip:port"
-//   "user:pass@ip:port"
 func (c *Config) SetProxyHTTP(addr string) {
 	c.SetHTTPProxy(addr)
 }
 
-// SetProxy sets a generic proxy URL string.
-// Examples:
-//   - "http://user:pass@127.0.0.1:8080"
-//   - "socks5://user:pass@127.0.0.1:1080"
-//   - "127.0.0.1:8080" (treated as http proxy).
 func (c *Config) SetProxy(proxy string) {
 	c.ProxyURL = proxy
 }
@@ -146,43 +109,31 @@ func (c *Config) SetSOCKS4Proxy(hostport string) {
 	c.ProxyURL = "socks4://" + hostport
 }
 
-// SetProxyAuth configures username and password used for proxy authentication.
-// Works for HTTP(S) and SOCKS5 proxies.
 func (c *Config) SetProxyAuth(username, password string) {
 	c.ProxyUsername = username
 	c.ProxyPassword = password
 }
 
-// --- Client-level helpers (for fasthttp-style usage) ---
-
-// SetHTTPProxy is a convenience wrapper around Config.SetHTTPProxy.
-// It should be called before the first request is sent.
 func (c *Client) SetHTTPProxy(hostport string) {
 	c.Config.SetHTTPProxy(hostport)
 }
 
-// SetProxyHTTP is a convenience wrapper around Config.SetProxyHTTP.
-// It accepts "ip:port" or "user:pass@ip:port".
 func (c *Client) SetProxyHTTP(addr string) {
 	c.Config.SetProxyHTTP(addr)
 }
 
-// SetSOCKS5Proxy is a convenience wrapper around Config.SetSOCKS5Proxy.
 func (c *Client) SetSOCKS5Proxy(hostport string) {
 	c.Config.SetSOCKS5Proxy(hostport)
 }
 
-// SetSOCKS4Proxy is a convenience wrapper around Config.SetSOCKS4Proxy.
 func (c *Client) SetSOCKS4Proxy(hostport string) {
 	c.Config.SetSOCKS4Proxy(hostport)
 }
 
-// SetProxy is a convenience wrapper around Config.SetProxy.
 func (c *Client) SetProxy(proxy string) {
 	c.Config.SetProxy(proxy)
 }
 
-// SetProxyAuth is a convenience wrapper around Config.SetProxyAuth.
 func (c *Client) SetProxyAuth(username, password string) {
 	c.Config.SetProxyAuth(username, password)
 }
@@ -190,16 +141,6 @@ func (c *Client) SetProxyAuth(username, password string) {
 var ErrBodyTooLarge = errors.New("v2fasthttp: response body too large")
 
 type Client struct {
-	// Config holds the public configuration options.
-	// It is embedded so users can configure the client in a fasthttp-style way:
-	//
-	//	claimClient := &client.Client{
-	//		MaxConnsPerHost: 100000,
-	//		IdleConnTimeout: 100 * time.Millisecond,
-	//		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	//	}
-	//
-	// The zero value is valid; defaults are applied lazily on first use.
 	Config
 
 	httpClient *http.Client
@@ -224,8 +165,6 @@ func New(cfg Config) (*Client, error) {
 	return c, nil
 }
 
-// init lazily initializes the underlying transports and pools based on Config.
-// It is safe for concurrent use.
 func (c *Client) init() error {
 	c.initOnce.Do(func() {
 		cfg := c.Config

@@ -11,8 +11,6 @@ import (
 	"github.com/seiffpes/v2fasthttp"
 )
 
-// Example: net/http-based client from your library
-// with HTTP/1.1 + HTTP/2 + optional HTTP/3 and proxy support.
 func main() {
 	cfg := v2fasthttp.DefaultClientConfig()
 
