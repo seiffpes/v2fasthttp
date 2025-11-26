@@ -1,7 +1,9 @@
 package v2fasthttp
 
 import (
+	"crypto/tls"
 	"encoding/json"
+	"sync/atomic"
 	"time"
 
 	"github.com/valyala/fasthttp"
@@ -9,10 +11,10 @@ import (
 )
 
 type (
-	Client       struct{ fasthttp.Client }
-	Request      = fasthttp.Request
-	Response     = fasthttp.Response
-	RequestCtx   = fasthttp.RequestCtx
+	Client         struct{ fasthttp.Client }
+	Request        = fasthttp.Request
+	Response       = fasthttp.Response
+	RequestCtx     = fasthttp.RequestCtx
 	RequestHandler = fasthttp.RequestHandler
 )
 
@@ -158,4 +160,125 @@ func PostJSONURL(url string, v any) ([]byte, int, error) {
 
 func PostJSONTimeoutURL(url string, v any, timeout time.Duration) ([]byte, int, error) {
 	return defaultClient.PostJSONTimeout(url, v, timeout)
+}
+
+type ClientOptions struct {
+	MaxConnsPerHost               int
+	MaxIdleConnDuration           time.Duration
+	MaxConnDuration               time.Duration
+	MaxIdemponentCallAttempts     int
+	ReadBufferSize                int
+	WriteBufferSize               int
+	ReadTimeout                   time.Duration
+	WriteTimeout                  time.Duration
+	MaxResponseBodySize           int
+	NoDefaultUserAgentHeader      bool
+	DisableHeaderNamesNormalizing bool
+	DisablePathNormalizing        bool
+	MaxConnWaitTimeout            time.Duration
+	TLSConfig                     *tls.Config
+	ProxyHTTP                     string
+	SOCKS5Proxy                   string
+}
+
+func NewClientWithOptions(opt ClientOptions) *Client {
+	c := &Client{}
+
+	if opt.MaxConnsPerHost > 0 {
+		c.MaxConnsPerHost = opt.MaxConnsPerHost
+	} else {
+		c.MaxConnsPerHost = 1024
+	}
+	if opt.MaxIdleConnDuration > 0 {
+		c.MaxIdleConnDuration = opt.MaxIdleConnDuration
+	} else {
+		c.MaxIdleConnDuration = 90 * time.Second
+	}
+	if opt.MaxConnDuration > 0 {
+		c.MaxConnDuration = opt.MaxConnDuration
+	}
+	if opt.MaxIdemponentCallAttempts > 0 {
+		c.MaxIdemponentCallAttempts = opt.MaxIdemponentCallAttempts
+	}
+	if opt.ReadBufferSize > 0 {
+		c.ReadBufferSize = opt.ReadBufferSize
+	}
+	if opt.WriteBufferSize > 0 {
+		c.WriteBufferSize = opt.WriteBufferSize
+	}
+	if opt.ReadTimeout > 0 {
+		c.ReadTimeout = opt.ReadTimeout
+	}
+	if opt.WriteTimeout > 0 {
+		c.WriteTimeout = opt.WriteTimeout
+	}
+	if opt.MaxResponseBodySize > 0 {
+		c.MaxResponseBodySize = opt.MaxResponseBodySize
+	}
+	c.NoDefaultUserAgentHeader = opt.NoDefaultUserAgentHeader
+	c.DisableHeaderNamesNormalizing = opt.DisableHeaderNamesNormalizing
+	c.DisablePathNormalizing = opt.DisablePathNormalizing
+	if opt.MaxConnWaitTimeout > 0 {
+		c.MaxConnWaitTimeout = opt.MaxConnWaitTimeout
+	}
+	c.TLSConfig = opt.TLSConfig
+
+	if opt.ProxyHTTP != "" {
+		c.SetProxyHTTP(opt.ProxyHTTP)
+	}
+	if opt.SOCKS5Proxy != "" {
+		c.SetSOCKS5Proxy(opt.SOCKS5Proxy)
+	}
+
+	return c
+}
+
+func NewHighPerfClient(proxy string) *Client {
+	opt := ClientOptions{
+		MaxConnsPerHost:               100000,
+		MaxIdleConnDuration:           100 * time.Millisecond,
+		ReadBufferSize:                64 * 1024,
+		WriteBufferSize:               64 * 1024,
+		NoDefaultUserAgentHeader:      true,
+		DisableHeaderNamesNormalizing: true,
+		DisablePathNormalizing:        true,
+		ProxyHTTP:                     proxy,
+	}
+	return NewClientWithOptions(opt)
+}
+
+type ClientPool struct {
+	clients []*Client
+	idx     uint32
+}
+
+func NewClientPool(size int, factory func() *Client) *ClientPool {
+	if size <= 0 {
+		size = 1
+	}
+	clients := make([]*Client, size)
+	for i := 0; i < size; i++ {
+		c := factory()
+		if c == nil {
+			c = &Client{}
+		}
+		clients[i] = c
+	}
+	return &ClientPool{clients: clients}
+}
+
+func (p *ClientPool) Next() *Client {
+	if p == nil || len(p.clients) == 0 {
+		return nil
+	}
+	i := atomic.AddUint32(&p.idx, 1)
+	return p.clients[i%uint32(len(p.clients))]
+}
+
+func (p *ClientPool) Do(req *Request, resp *Response) error {
+	c := p.Next()
+	if c == nil {
+		return fasthttp.ErrNoFreeConns
+	}
+	return c.Client.Do(req, resp)
 }
