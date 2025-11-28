@@ -3,6 +3,7 @@ package v2fasthttp
 import (
 	"crypto/tls"
 	"encoding/json"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -162,6 +163,46 @@ func PostJSONTimeoutURL(url string, v any, timeout time.Duration) ([]byte, int, 
 	return defaultClient.PostJSONTimeout(url, v, timeout)
 }
 
+func (c *Client) GetString(url string) (string, int, error) {
+	b, status, err := c.GetBytes(url)
+	return string(b), status, err
+}
+
+func (c *Client) GetStringTimeout(url string, timeout time.Duration) (string, int, error) {
+	b, status, err := c.GetBytesTimeout(url, timeout)
+	return string(b), status, err
+}
+
+func (c *Client) PostString(url string, body []byte) (string, int, error) {
+	b, status, err := c.PostBytes(url, body)
+	return string(b), status, err
+}
+
+func (c *Client) PostStringTimeout(url string, body []byte, timeout time.Duration) (string, int, error) {
+	b, status, err := c.PostBytesTimeout(url, body, timeout)
+	return string(b), status, err
+}
+
+func GetStringURL(url string) (string, int, error) {
+	b, status, err := GetBytesURL(url)
+	return string(b), status, err
+}
+
+func GetStringTimeoutURL(url string, timeout time.Duration) (string, int, error) {
+	b, status, err := GetBytesTimeoutURL(url, timeout)
+	return string(b), status, err
+}
+
+func PostStringURL(url string, body []byte) (string, int, error) {
+	b, status, err := PostBytesURL(url, body)
+	return string(b), status, err
+}
+
+func PostStringTimeoutURL(url string, body []byte, timeout time.Duration) (string, int, error) {
+	b, status, err := PostBytesTimeoutURL(url, body, timeout)
+	return string(b), status, err
+}
+
 type ClientOptions struct {
 	MaxConnsPerHost               int
 	MaxIdleConnDuration           time.Duration
@@ -242,7 +283,13 @@ func NewHighPerfClient(proxy string) *Client {
 		NoDefaultUserAgentHeader:      true,
 		DisableHeaderNamesNormalizing: true,
 		DisablePathNormalizing:        true,
-		ProxyHTTP:                     proxy,
+	}
+	if proxy != "" {
+		if strings.HasPrefix(proxy, "socks5://") {
+			opt.SOCKS5Proxy = proxy
+		} else {
+			opt.ProxyHTTP = proxy
+		}
 	}
 	return NewClientWithOptions(opt)
 }
@@ -281,4 +328,21 @@ func (p *ClientPool) Do(req *Request, resp *Response) error {
 		return fasthttp.ErrNoFreeConns
 	}
 	return c.Client.Do(req, resp)
+}
+
+func NewProxyClientPool(proxies []string, perProxy int) *ClientPool {
+	if len(proxies) == 0 {
+		return nil
+	}
+	if perProxy <= 0 {
+		perProxy = 1
+	}
+	total := len(proxies) * perProxy
+	clients := make([]*Client, 0, total)
+	for _, pxy := range proxies {
+		for i := 0; i < perProxy; i++ {
+			clients = append(clients, NewHighPerfClient(pxy))
+		}
+	}
+	return &ClientPool{clients: clients}
 }
