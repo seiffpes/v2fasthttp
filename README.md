@@ -224,6 +224,26 @@ go run ./examples/bench -url https://httpbin.org/get -total 200000 -concurrency 
 go run ./examples/bench -url https://httpbin.org/get -total 200000 -concurrency 200 -proxy user:pass@127.0.0.1:8080
 ```
 
+### Micro-benchmarks (v2fasthttp vs net/http vs fasthttp)
+
+There is also a small set of micro-benchmarks in `bench_test.go` that compare:
+
+ - `v2fasthttp` default client (`Do`)
+ - `v2fasthttp` high-performance client
+ - `v2fasthttp` `GetBytes`
+ - `net/http.Client`
+ - `fasthttp.Client`
+
+They run against an in-memory `httptest.Server` (no external network).
+
+From the project root:
+
+```bash
+go test -run=^$ -bench=. ./...
+```
+
+This will print benchmark lines for each client (with `ns/op`, allocations, etc.) so you can compare the relative performance on your machine.
+
 ## License
 
 Licensed under the MIT License.  
