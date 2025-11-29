@@ -92,6 +92,24 @@ func TestNewClientWithOptionsHTTP3WithProxyFallsBackToHTTP2(t *testing.T) {
 	}
 }
 
+func TestNewClientWithOptionsHTTP3WithSocksProxyFallsBackToHTTP2(t *testing.T) {
+	c := NewClientWithOptions(ClientOptions{
+		HTTPVersion: HTTP3,
+		SOCKS5Proxy: "socks5://127.0.0.1:9050",
+	})
+
+	if c.httpVersion != HTTP2 {
+		t.Fatalf("expected fallback to HTTP2 when HTTP3 + SOCKS5 proxy, got %v", c.httpVersion)
+	}
+	tr := trFromHTTPClient(c.httpClient)
+	if tr == nil {
+		t.Fatalf("expected *http.Transport after fallback")
+	}
+	if tr.DialContext == nil {
+		t.Fatalf("expected DialContext to be set for SOCKS5 transport after fallback")
+	}
+}
+
 func TestSetProxyHTTPConfiguresTransportProxy(t *testing.T) {
 	c := NewClientWithOptions(ClientOptions{
 		HTTPVersion: HTTP2,
@@ -140,6 +158,38 @@ func TestSetSOCKS5ProxyConfiguresDialContext(t *testing.T) {
 	}
 }
 
+func TestUseNetHTTPBehaviour(t *testing.T) {
+	// Default client: HTTP1, no net/http
+	c1 := NewClientWithOptions(ClientOptions{})
+	if c1.useNetHTTP() {
+		t.Fatalf("expected useNetHTTP to be false for HTTP1")
+	}
+
+	// HTTP2 client: should use net/http
+	c2 := NewClientWithOptions(ClientOptions{HTTPVersion: HTTP2})
+	if !c2.useNetHTTP() {
+		t.Fatalf("expected useNetHTTP to be true for HTTP2")
+	}
+
+	// HTTP3 client without proxy: should use net/http (http3.Transport)
+	c3 := NewClientWithOptions(ClientOptions{HTTPVersion: HTTP3})
+	if !c3.useNetHTTP() {
+		t.Fatalf("expected useNetHTTP to be true for HTTP3 without proxy")
+	}
+
+	// HTTP3 client with proxy: falls back to HTTP2, still uses net/http
+	c4 := NewClientWithOptions(ClientOptions{
+		HTTPVersion: HTTP3,
+		ProxyHTTP:   "127.0.0.1:8080",
+	})
+	if c4.httpVersion != HTTP2 {
+		t.Fatalf("expected HTTP2 after fallback, got %v", c4.httpVersion)
+	}
+	if !c4.useNetHTTP() {
+		t.Fatalf("expected useNetHTTP to be true after HTTP3+proxy fallback to HTTP2")
+	}
+}
+
 func TestNewProxyClientPoolFromString(t *testing.T) {
 	pool := NewProxyClientPoolFromString("127.0.0.1:8080\nsocks5://127.0.0.1:9050", 2)
 	if pool == nil {
@@ -153,4 +203,3 @@ func TestNewProxyClientPoolFromString(t *testing.T) {
 		t.Fatalf("expected nil pool for empty list")
 	}
 }
-
