@@ -17,12 +17,40 @@ func main() {
 	total := flag.Int64("total", 200000, "total number of requests")
 	concurrency := flag.Int("concurrency", 200, "number of concurrent workers")
 	proxy := flag.String("proxy", "", "optional HTTP proxy, e.g. user:pass@127.0.0.1:8080")
+	version := flag.String("version", "1", "HTTP version to use: 1, 2, or 3")
 	flag.Parse()
 
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	pool := v2.NewClientPool(*concurrency, func() *v2.Client {
-		return v2.NewHighPerfClient(*proxy)
+		switch *version {
+		case "2":
+			return v2.NewClientWithOptions(v2.ClientOptions{
+				HTTPVersion:                   v2.HTTP2,
+				MaxConnsPerHost:               100000,
+				MaxIdleConnDuration:           100 * time.Millisecond,
+				ReadBufferSize:                64 * 1024,
+				WriteBufferSize:               64 * 1024,
+				NoDefaultUserAgentHeader:      true,
+				DisableHeaderNamesNormalizing: true,
+				DisablePathNormalizing:        true,
+				ProxyHTTP:                     *proxy,
+			})
+		case "3":
+			return v2.NewClientWithOptions(v2.ClientOptions{
+				HTTPVersion:                   v2.HTTP3,
+				MaxConnsPerHost:               100000,
+				MaxIdleConnDuration:           100 * time.Millisecond,
+				ReadBufferSize:                64 * 1024,
+				WriteBufferSize:               64 * 1024,
+				NoDefaultUserAgentHeader:      true,
+				DisableHeaderNamesNormalizing: true,
+				DisablePathNormalizing:        true,
+				ProxyHTTP:                     *proxy,
+			})
+		default:
+			return v2.NewHighPerfClient(*proxy)
+		}
 	})
 
 	var done int64
@@ -63,4 +91,3 @@ func main() {
 		log.Printf("used proxy: %s\n", *proxy)
 	}
 }
-

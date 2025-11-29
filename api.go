@@ -1,25 +1,49 @@
 package v2fasthttp
 
 import (
+	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/quic-go/quic-go/http3"
 	"github.com/valyala/fasthttp"
 	"github.com/valyala/fasthttp/fasthttpproxy"
+	"golang.org/x/net/http2"
+	xnetproxy "golang.org/x/net/proxy"
 )
 
 type (
-	Client         struct{ fasthttp.Client }
+	HTTPVersion int
+
+	Client struct {
+		fasthttp.Client
+		httpVersion HTTPVersion
+		httpClient  *http.Client
+	}
 	Request        = fasthttp.Request
 	Response       = fasthttp.Response
 	RequestCtx     = fasthttp.RequestCtx
 	RequestHandler = fasthttp.RequestHandler
 )
 
-var defaultClient = &Client{}
+const (
+	HTTP1 HTTPVersion = iota + 1
+	HTTP2
+	HTTP3
+)
+
+var defaultClient = &Client{
+	httpVersion: HTTP1,
+}
 
 func Do(req *Request, resp *Response) error {
 	return defaultClient.Do(req, resp)
@@ -41,12 +65,114 @@ func Post(dst []byte, url string, postArgs *fasthttp.Args) (statusCode int, body
 	return defaultClient.Post(dst, url, postArgs)
 }
 
+func (c *Client) useNetHTTP() bool {
+	return c != nil && (c.httpVersion == HTTP2 || c.httpVersion == HTTP3) && c.httpClient != nil
+}
+
+func (c *Client) Do(req *Request, resp *Response) error {
+	if !c.useNetHTTP() {
+		return c.Client.Do(req, resp)
+	}
+	httpReq, err := convertRequestToHTTP(req)
+	if err != nil {
+		return err
+	}
+	httpResp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	return convertHTTPResponse(httpResp, resp)
+}
+
+func (c *Client) DoTimeout(req *Request, resp *Response, timeout time.Duration) error {
+	if !c.useNetHTTP() {
+		return c.Client.DoTimeout(req, resp, timeout)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	httpReq, err := convertRequestToHTTP(req)
+	if err != nil {
+		return err
+	}
+	httpReq = httpReq.WithContext(ctx)
+
+	httpResp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	return convertHTTPResponse(httpResp, resp)
+}
+
 func (c *Client) SetProxyHTTP(proxy string) {
+	if c == nil {
+		return
+	}
 	c.Client.Dial = fasthttpproxy.FasthttpHTTPDialer(proxy)
+
+	tr := trFromHTTPClient(c.httpClient)
+	if tr == nil {
+		return
+	}
+	u, err := parseProxyURL(proxy, "http")
+	if err != nil {
+		return
+	}
+	tr.Proxy = http.ProxyURL(u)
 }
 
 func (c *Client) SetSOCKS5Proxy(proxyAddr string) {
+	if c == nil {
+		return
+	}
 	c.Client.Dial = fasthttpproxy.FasthttpSocksDialer(proxyAddr)
+
+	tr := trFromHTTPClient(c.httpClient)
+	if tr == nil {
+		return
+	}
+	setHTTPClientSOCKS5(tr, proxyAddr)
+}
+
+func (c *Client) SetProxy(proxy string) {
+	if proxy == "" {
+		c.Client.Dial = nil
+		return
+	}
+	if strings.HasPrefix(proxy, "socks5://") {
+		c.SetSOCKS5Proxy(proxy)
+		return
+	}
+	c.SetProxyHTTP(proxy)
+}
+
+func (c *Client) SetProxyFromEnvironment() {
+	if c == nil {
+		return
+	}
+	c.Client.Dial = fasthttpproxy.FasthttpProxyHTTPDialer()
+
+	tr := trFromHTTPClient(c.httpClient)
+	if tr == nil {
+		return
+	}
+	tr.Proxy = http.ProxyFromEnvironment
+}
+
+func (c *Client) SetProxyFromEnvironmentTimeout(timeout time.Duration) {
+	if c == nil {
+		return
+	}
+	c.Client.Dial = fasthttpproxy.FasthttpProxyHTTPDialerTimeout(timeout)
+
+	tr := trFromHTTPClient(c.httpClient)
+	if tr == nil {
+		return
+	}
+	tr.Proxy = http.ProxyFromEnvironment
+	if timeout > 0 && c.httpClient.Timeout == 0 {
+		c.httpClient.Timeout = timeout
+	}
 }
 
 func (c *Client) DoBytes(method, url string, body []byte) ([]byte, int, error) {
@@ -204,6 +330,7 @@ func PostStringTimeoutURL(url string, body []byte, timeout time.Duration) (strin
 }
 
 type ClientOptions struct {
+	HTTPVersion                   HTTPVersion
 	MaxConnsPerHost               int
 	MaxIdleConnDuration           time.Duration
 	MaxConnDuration               time.Duration
@@ -224,6 +351,15 @@ type ClientOptions struct {
 
 func NewClientWithOptions(opt ClientOptions) *Client {
 	c := &Client{}
+
+	if opt.HTTPVersion == 0 {
+		opt.HTTPVersion = HTTP1
+	}
+	if opt.HTTPVersion == HTTP3 && (opt.ProxyHTTP != "" || opt.SOCKS5Proxy != "") {
+		// HTTP/3 over HTTP/SOCKS5 proxies isn't supported; fall back to HTTP/2.
+		opt.HTTPVersion = HTTP2
+	}
+	c.httpVersion = opt.HTTPVersion
 
 	if opt.MaxConnsPerHost > 0 {
 		c.MaxConnsPerHost = opt.MaxConnsPerHost
@@ -264,6 +400,10 @@ func NewClientWithOptions(opt ClientOptions) *Client {
 	}
 	c.TLSConfig = opt.TLSConfig
 
+	if opt.HTTPVersion == HTTP2 || opt.HTTPVersion == HTTP3 {
+		c.httpClient = newHTTPClient(opt.HTTPVersion, opt)
+	}
+
 	if opt.ProxyHTTP != "" {
 		c.SetProxyHTTP(opt.ProxyHTTP)
 	}
@@ -274,8 +414,57 @@ func NewClientWithOptions(opt ClientOptions) *Client {
 	return c
 }
 
+func newHTTPClient(version HTTPVersion, opt ClientOptions) *http.Client {
+	timeout := opt.ReadTimeout
+	if opt.WriteTimeout > timeout {
+		timeout = opt.WriteTimeout
+	}
+
+	switch version {
+	case HTTP2:
+		tr := &http.Transport{
+			TLSClientConfig: opt.TLSConfig,
+		}
+		if opt.MaxConnsPerHost > 0 {
+			tr.MaxConnsPerHost = opt.MaxConnsPerHost
+		}
+		if opt.MaxIdleConnDuration > 0 {
+			tr.IdleConnTimeout = opt.MaxIdleConnDuration
+		}
+		if opt.ReadBufferSize > 0 {
+			tr.ReadBufferSize = opt.ReadBufferSize
+		}
+		if opt.WriteBufferSize > 0 {
+			tr.WriteBufferSize = opt.WriteBufferSize
+		}
+		_ = http2.ConfigureTransport(tr)
+
+		client := &http.Client{
+			Transport: tr,
+		}
+		if timeout > 0 {
+			client.Timeout = timeout
+		}
+		return client
+	case HTTP3:
+		rt := &http3.Transport{
+			TLSClientConfig: opt.TLSConfig,
+		}
+		client := &http.Client{
+			Transport: rt,
+		}
+		if timeout > 0 {
+			client.Timeout = timeout
+		}
+		return client
+	default:
+		return nil
+	}
+}
+
 func NewHighPerfClient(proxy string) *Client {
 	opt := ClientOptions{
+		HTTPVersion:                   HTTP1,
 		MaxConnsPerHost:               100000,
 		MaxIdleConnDuration:           100 * time.Millisecond,
 		ReadBufferSize:                64 * 1024,
@@ -284,14 +473,11 @@ func NewHighPerfClient(proxy string) *Client {
 		DisableHeaderNamesNormalizing: true,
 		DisablePathNormalizing:        true,
 	}
+	c := NewClientWithOptions(opt)
 	if proxy != "" {
-		if strings.HasPrefix(proxy, "socks5://") {
-			opt.SOCKS5Proxy = proxy
-		} else {
-			opt.ProxyHTTP = proxy
-		}
+		c.SetProxy(proxy)
 	}
-	return NewClientWithOptions(opt)
+	return c
 }
 
 type ClientPool struct {
@@ -327,7 +513,7 @@ func (p *ClientPool) Do(req *Request, resp *Response) error {
 	if c == nil {
 		return fasthttp.ErrNoFreeConns
 	}
-	return c.Client.Do(req, resp)
+	return c.Do(req, resp)
 }
 
 func NewProxyClientPool(proxies []string, perProxy int) *ClientPool {
@@ -345,4 +531,116 @@ func NewProxyClientPool(proxies []string, perProxy int) *ClientPool {
 		}
 	}
 	return &ClientPool{clients: clients}
+}
+
+func NewHighPerfClientPool(size int, proxy string) *ClientPool {
+	return NewClientPool(size, func() *Client {
+		return NewHighPerfClient(proxy)
+	})
+}
+
+func convertRequestToHTTP(req *Request) (*http.Request, error) {
+	if req == nil {
+		return nil, errors.New("nil request")
+	}
+	uri := req.URI()
+	urlStr := string(uri.FullURI())
+
+	body := req.Body()
+	var bodyReader io.Reader
+	if len(body) > 0 {
+		bodyReader = bytes.NewReader(body)
+	}
+
+	httpReq, err := http.NewRequest(string(req.Header.Method()), urlStr, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.VisitAll(func(k, v []byte) {
+		key := string(k)
+		value := string(v)
+		if strings.EqualFold(key, "Host") {
+			httpReq.Host = value
+			return
+		}
+		httpReq.Header.Add(key, value)
+	})
+
+	return httpReq, nil
+}
+
+func convertHTTPResponse(httpResp *http.Response, resp *Response) error {
+	if httpResp == nil || resp == nil {
+		return nil
+	}
+	defer httpResp.Body.Close()
+
+	resp.Reset()
+	resp.SetStatusCode(httpResp.StatusCode)
+	for k, values := range httpResp.Header {
+		for _, v := range values {
+			resp.Header.Add(k, v)
+		}
+	}
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return err
+	}
+	resp.SetBody(body)
+	return nil
+}
+
+func parseProxyURL(proxyStr, defaultScheme string) (*url.URL, error) {
+	if proxyStr == "" {
+		return nil, errors.New("empty proxy")
+	}
+	if !strings.Contains(proxyStr, "://") {
+		proxyStr = defaultScheme + "://" + proxyStr
+	}
+	return url.Parse(proxyStr)
+}
+
+func trFromHTTPClient(c *http.Client) *http.Transport {
+	if c == nil {
+		return nil
+	}
+	tr, ok := c.Transport.(*http.Transport)
+	if !ok {
+		return nil
+	}
+	return tr
+}
+
+func setHTTPClientSOCKS5(tr *http.Transport, proxyAddr string) {
+	if tr == nil || proxyAddr == "" {
+		return
+	}
+	addr := strings.TrimPrefix(proxyAddr, "socks5://")
+	dialer, err := xnetproxy.SOCKS5("tcp", addr, nil, xnetproxy.Direct)
+	if err != nil {
+		return
+	}
+	tr.Proxy = nil
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return dialer.Dial(network, addr)
+	}
+}
+
+func NewProxyClientPoolFromString(list string, perProxy int) *ClientPool {
+	if list == "" {
+		return nil
+	}
+	fields := strings.FieldsFunc(list, func(r rune) bool {
+		switch r {
+		case '\n', '\r', '\t', ' ', ',', ';':
+			return true
+		default:
+			return false
+		}
+	})
+	if len(fields) == 0 {
+		return nil
+	}
+	return NewProxyClientPool(fields, perProxy)
 }

@@ -1,211 +1,230 @@
 # v2fasthttp
 
-v2fasthttp is a small, fast HTTP toolkit for Go built on top of `net/http` and `quic-go`.
+`v2fasthttp` is a high-performance HTTP client toolkit for Go built directly on top of [`github.com/valyala/fasthttp`](https://github.com/valyala/fasthttp).
 
-It provides:
-
-- A high‑performance client with HTTP/1.1, HTTP/2 and optional HTTP/3 support.
-- A fasthttp‑style Request/Response API.
-- A lightweight HTTP server with a simple router (params and wildcards).
-- Multiple examples that cover common usage patterns.
-
-> Note: this project is standalone and does not depend on the original `fasthttp` module.
+The focus is:
+ - Fast HTTP/1.1 requests using the fasthttp client.
+ - Simple, fasthttp-style API: `Request`, `Response`, `Do`, `Get`, `Post`, etc.
+ - Strong proxy support (HTTP and SOCKS5) with helpers.
+ - Multi-client pools for very high QPS workloads.
+ - Optional HTTP/2 and HTTP/3 clients built on top of `net/http` and `quic-go`, while keeping the fasthttp-style `Request` / `Response` API.
 
 ## Installation
-
-Use it as a normal Go module:
 
 ```bash
 go get github.com/seiffpes/v2fasthttp
 ```
 
-## Packages
+## Core types
 
-- `v2fasthttp` (root):
-  - `ClientConfig`, `Client`
-  - `Request`, `Response` + helpers (`Do`, `Get`, `Post`, `Delete`, …)
-  - `Session` (base URL + headers + auth)
-  - `Server`, `Router`, `RequestCtx`
-- `v2fasthttp/client`:
-  - Low‑level client built on `net/http` with optional HTTP/3.
-- `v2fasthttp/server`:
-  - Lightweight HTTP server + router.
+Package `v2fasthttp` exposes the main fasthttp types:
 
-## Client – basic usage
+ - `type Client struct{ fasthttp.Client /* + HTTP2/3 client */ }`
+ - `type Request = fasthttp.Request`
+ - `type Response = fasthttp.Response`
+ - `type RequestCtx = fasthttp.RequestCtx`
+ - `type RequestHandler = fasthttp.RequestHandler`
+
+There is also a global default client used by package-level helpers.
+
+## Quick start
+
+Simple GET using the default client:
 
 ```go
-import (
-    "context"
-    "log"
-    "time"
+package main
 
-    "v2fasthttp"
+import (
+	"log"
+
+	v2 "github.com/seiffpes/v2fasthttp"
 )
 
 func main() {
-    cfg := v2fasthttp.DefaultClientConfig()
+	var req v2.Request
+	var resp v2.Response
 
-    // Fine‑tune the configuration.
-    cfg.MaxConnsPerHost = 1024
-    cfg.MaxIdleConns = 4096
-    cfg.MaxIdleConnsPerHost = 1024
-    cfg.DialTimeout = 3 * time.Second
-    cfg.IdleConnTimeout = 60 * time.Second
+	req.SetRequestURI("https://httpbin.org/get")
+	req.Header.SetMethod("GET")
 
-    // Protocols.
-    cfg.DisableHTTP2 = false // HTTP/1.1 + HTTP/2
-    cfg.EnableHTTP3 = false  // enable only if you have an HTTP/3 server
+	if err := v2.Do(&req, &resp); err != nil {
+		log.Fatal(err)
+	}
 
-    c, err := v2fasthttp.NewClient(cfg)
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-    defer cancel()
-
-    body, status, err := c.GetBytes(ctx, "http://localhost:8080/")
-    if err != nil {
-        log.Fatal(err)
-    }
-    log.Printf("status=%d body=%s", status, string(body))
+	log.Printf("status=%d body=%s", resp.StatusCode(), resp.Body())
 }
 ```
 
-## Client – fasthttp‑style Request/Response API
+Using the high-level helpers:
 
 ```go
-req := v2fasthttp.AcquireRequest()
-resp := v2fasthttp.AcquireResponse()
-defer v2fasthttp.ReleaseRequest(req)
-defer v2fasthttp.ReleaseResponse(resp)
-
-req.SetMethod("GET")
-req.SetRequestURI("http://localhost:8080/hello?name=world")
-
-if err := v2fasthttp.Get("http://localhost:8080/hello?name=world", resp); err != nil {
-    log.Fatal(err)
-}
-log.Printf("status=%d body=%s", resp.StatusCode, resp.Body)
-```
-
-### Configuring the default client
-
-You can configure a single global client used by the helpers (`Do`, `Get`, `Post`, …):
-
-```go
-cfg := v2fasthttp.DefaultClientConfig()
-cfg.MaxConnsPerHost = 1000
-cfg.DisableHTTP2 = false
-cfg.EnableHTTP3 = false
-
-if err := v2fasthttp.SetDefaultClientConfig(cfg); err != nil {
-    log.Fatal(err)
-}
-
-resp := v2fasthttp.AcquireResponse()
-defer v2fasthttp.ReleaseResponse(resp)
-
-if err := v2fasthttp.Get("http://localhost:8080/", resp); err != nil {
-    log.Fatal(err)
-}
-```
-
-Or provide a fully constructed client:
-
-```go
-c, _ := v2fasthttp.NewClient(cfg)
-v2fasthttp.SetDefaultClient(c)
-```
-
-## Session API
-
-`Session` makes API clients easier (base URL + headers + auth in one place):
-
-```go
-sess := v2fasthttp.NewSession(c).
-    WithBaseURL("https://api.example.com/v1").
-    WithBearer("TOKEN").
-    WithHeader("X-App", "my-service")
-
-resp, err := sess.Get(context.Background(), "/users")
+body, status, err := v2.GetBytesURL("https://httpbin.org/get")
 if err != nil {
-    log.Fatal(err)
+	log.Fatal(err)
 }
+log.Printf("status=%d body=%s", status, string(body))
 ```
 
-## Server + Router
+## High-performance client
 
-Example from `examples/server`:
+You can fully control the underlying client via `ClientOptions`:
 
 ```go
-router := server.NewRouter()
+opt := v2.ClientOptions{
+	HTTPVersion:                  v2.HTTP1, // or v2.HTTP2 / v2.HTTP3
+	MaxConnsPerHost:               100000,
+	MaxIdleConnDuration:           100 * time.Millisecond,
+	ReadBufferSize:                64 * 1024,
+	WriteBufferSize:               64 * 1024,
+	MaxIdemponentCallAttempts:     1,
+	NoDefaultUserAgentHeader:      true,
+	DisableHeaderNamesNormalizing: true,
+	DisablePathNormalizing:        true,
+	MaxConnWaitTimeout:            time.Second,
+	TLSConfig: &tls.Config{
+		InsecureSkipVerify: true,
+	},
+}
 
-router.GET("/", func(ctx *server.RequestCtx) {
-    ctx.SetContentType("text/plain; charset=utf-8")
-    ctx.WriteString("hello from v2fasthttp\n")
-})
+c := v2.NewClientWithOptions(opt)
+```
 
-router.GET("/user/:id", func(ctx *server.RequestCtx) {
-    id := ctx.UserValue("id")
-    ctx.WriteString("user id = " + id)
-})
+For a ready-to-use aggressive configuration there is:
 
-router.POST("/echo", func(ctx *server.RequestCtx) {
-    body, _ := io.ReadAll(ctx.Request().Body)
-    ctx.Write(body)
-})
+```go
+c := v2.NewHighPerfClient("")
+```
 
-s := server.NewFast(router.Handler, server.DefaultConfig())
-if err := s.ListenAndServe(); err != nil {
-    log.Fatal(err)
+This is tuned for very high QPS and is what the benchmark example uses.
+
+## HTTP/2 and HTTP/3
+
+`ClientOptions` has an `HTTPVersion` field that lets you switch the transport behind the same fasthttp-style API:
+
+```go
+// HTTP/2 client with an HTTP proxy
+opt := v2.ClientOptions{
+	HTTPVersion: v2.HTTP2,
+	ProxyHTTP:   "user:pass@127.0.0.1:8080",
+	TLSConfig:   &tls.Config{InsecureSkipVerify: true},
+}
+
+c := v2.NewClientWithOptions(opt)
+
+var req v2.Request
+var resp v2.Response
+
+req.SetRequestURI("https://example.com/")
+req.Header.SetMethod("GET")
+
+if err := c.Do(&req, &resp); err != nil {
+	log.Fatal(err)
 }
 ```
 
-## Examples
+HTTP/1.1 (`HTTP1`) continues to use the native `fasthttp.Client`. HTTP/2 uses a tuned `net/http.Client` under the hood, and HTTP/3 uses `quic-go`'s HTTP/3 transport. Proxy helpers (`SetProxy`, `SetProxyHTTP`, `SetSOCKS5Proxy`, `SetProxyFromEnvironment`) work with HTTP/1.1 and HTTP/2.
 
-- `examples/server`  
-  Basic HTTP server using the router.
+If you set `HTTPVersion: HTTP3` together with `ProxyHTTP` or `SOCKS5Proxy`, the client will automatically fall back to `HTTP2`, since HTTP/3 over HTTP or SOCKS5 proxies is not supported in this package.
 
-- `examples/client`  
-  Simple client using `v2fasthttp/client` directly.
+## Proxy support
 
-- `examples/requests`  
-  Demonstrates multiple clients (HTTP/1 only, HTTP/1+2, HTTP/1+2+3) and
-  GET/POST/DELETE using the Request/Response API and helpers.
+### Per-client proxy
 
-- `examples/defaultclient`  
-  Shows how to configure the global default client (`SetDefaultClientConfig`)
-  and use the package‑level `Do/Get/Post` helpers.
+On any `*Client` you can set proxies:
 
-- `examples/h2h3`  
-  Server and client that support HTTP/2 and HTTP/3 (via `quic-go`).
+```go
+// HTTP proxy, with or without auth.
+c.SetProxyHTTP("127.0.0.1:8080")
+c.SetProxyHTTP("user:pass@127.0.0.1:8080")
 
-## Running the examples
+// SOCKS5 proxy.
+c.SetSOCKS5Proxy("socks5://127.0.0.1:9050")
+
+// Auto-detect (socks5:// → SOCKS5, otherwise HTTP).
+c.SetProxy("user:pass@127.0.0.1:8080")
+c.SetProxy("socks5://127.0.0.1:9050")
+
+// Use HTTP(S)_PROXY / NO_PROXY from the environment.
+c.SetProxyFromEnvironment()
+c.SetProxyFromEnvironmentTimeout(2 * time.Second)
+```
+
+You can also configure proxies through `ClientOptions` (`ProxyHTTP`, `SOCKS5Proxy`) and build the client with `NewClientWithOptions`.
+
+### Multi-client pools and proxy lists
+
+For high concurrency and proxy lists there is a small pool type:
+
+```go
+pool := v2.NewHighPerfClientPool(200, "user:pass@127.0.0.1:8080")
+
+var req v2.Request
+var resp v2.Response
+
+req.SetRequestURI("https://httpbin.org/get")
+req.Header.SetMethod("GET")
+
+if err := pool.Do(&req, &resp); err != nil {
+	log.Fatal(err)
+}
+```
+
+To use multiple proxies:
+
+```go
+proxies := []string{
+	"user:pass@127.0.0.1:8080",
+	"127.0.0.1:8081",
+	"socks5://127.0.0.1:9050",
+}
+
+pool := v2.NewProxyClientPool(proxies, 4)
+```
+
+Or from a string list (newline / comma / space separated):
+
+```go
+list := "user:pass@127.0.0.1:8080\n127.0.0.1:8081\nsocks5://127.0.0.1:9050"
+pool := v2.NewProxyClientPoolFromString(list, 4)
+```
+
+The pool does round-robin over all clients and proxies.
+
+## Byte and JSON helpers
+
+Common helpers on `*Client`:
+
+ - `DoBytes`, `DoBytesTimeout`
+ - `GetBytes`, `GetBytesTimeout`
+ - `PostBytes`, `PostBytesTimeout`
+ - `PostJSON`, `PostJSONTimeout`
+ - `GetString`, `GetStringTimeout`
+ - `PostString`, `PostStringTimeout`
+
+And global helpers using the default client:
+
+ - `GetBytesURL`, `GetBytesTimeoutURL`
+ - `PostBytesURL`, `PostBytesTimeoutURL`
+ - `PostJSONURL`, `PostJSONTimeoutURL`
+ - `GetStringURL`, `GetStringTimeoutURL`
+ - `PostStringURL`, `PostStringTimeoutURL`
+
+These keep the fasthttp style but make basic HTTP requests quick to write.
+
+## Benchmark example
+
+`examples/bench` is a small benchmark tool that can hit a URL with many concurrent clients (optionally through a proxy) and print the achieved requests per second.
 
 From the project root:
 
 ```bash
-# HTTP server on :8080
-go run ./examples/server
+go run ./examples/bench -url https://httpbin.org/get -total 200000 -concurrency 200
 
-# Simple client
-go run ./examples/client
-
-# Multiple clients + GET/POST/DELETE
-go run ./examples/requests
-
-# Configure default client and use Do/Get/Post
-go run ./examples/defaultclient
-
-# h2/h3 server (requires TLS certs)
-go run ./examples/h2h3/server
-
-# h2/h3 client
-go run ./examples/h2h3/client
+# With an HTTP proxy
+go run ./examples/bench -url https://httpbin.org/get -total 200000 -concurrency 200 -proxy user:pass@127.0.0.1:8080
 ```
 
 ## License
 
 Licensed under the MIT License.  
-See `LICENSE` for details.
+Copyright (c) 2025 fpes.
